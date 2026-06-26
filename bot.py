@@ -3,10 +3,10 @@ import time
 import json
 import telebot
 
-# Recupera le credenziali che nasconderemo su Render
+# Recupera le credenziali da Render
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHANNEL_ID = os.environ.get('TELEGRAM_CHANNEL_ID')
-AMAZON_TAG = os.environ.get('AMAZON_TAG') # Il tuo tag affiliato (es. pippo-21)
+AMAZON_TAG = os.environ.get('AMAZON_TAG')
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -25,32 +25,41 @@ def genera_link_affiliato(asin):
 
 def avvia_pubblicazione():
     print("Bot avviato e in ascolto...")
-    offerte = carica_offerte()
     
-    if not offerte:
-        print("Nessuna offerta trovata nel file.")
-        return
+    # Se vuoi che il bot controlli continuamente il file, 
+    # mettiamo il ciclo qui
+    while True:
+        offerte = carica_offerte()
+        
+        if not offerte:
+            print("Nessuna offerta trovata nel file. Ricontrollo tra 60 secondi...")
+            time.sleep(60)
+            continue
 
-    for offerta in offerte:
-        link = genera_link_affiliato(offerta['asin'])
-        
-        # Testo del messaggio che apparirà su Telegram
-        messaggio = (
-            f"🏋️‍♂️ **OFFERTA INTEGRATORI** 🏋️‍♂️\n\n"
-            f"🔥 **{offerta['titolo']}**\n\n"
-            f"🔗 👉 [Acquista in Offerta su Amazon]({link})"
-        )
-        
-        try:
-            # Invia il messaggio al canale
-            bot.send_message(CHANNEL_ID, messaggio, parse_mode='Markdown', disable_web_page_preview=False)
-            print(f"Inviata offerta: {offerta['titolo']}")
-        except Exception as e:
-            print(f"Errore nell'invio: {e}")
-        
-        # Pausa tra un post e l'altro per non fare spam (es. 4 ore = 14400 secondi)
-        # Per fare un test rapido puoi impostarlo a 10 secondi, poi lo alzi.
-        time.sleep(14400) 
+        for offerta in offerte:
+            link = genera_link_affiliato(offerta['asin'])
+            
+            # Formattazione in HTML: più sicura ed evita bug con caratteri speciali
+            messaggio = (
+                f"🏋️‍♂️ <b>OFFERTA INTEGRATORI</b> 🏋️‍♂️\n\n"
+                f"🔥 <b>{offerta['titolo']}</b>\n\n"
+                f"🔗 👉 <a href='{link}'>Acquista in Offerta su Amazon</a>"
+            )
+            
+            try:
+                # Invia il messaggio al canale usando HTML
+                bot.send_message(CHANNEL_ID, messaggio, parse_mode='HTML', disable_web_page_preview=False)
+                print(f"Inviata offerta: {offerta['titolo']}")
+            except Exception as e:
+                print(f"Errore nell'invio di {offerta['titolo']}: {e}")
+            
+            # Pausa tra un post e l'altro (es. 4 ore)
+            # NOTA: Per i test cambialo a 10 secondi!
+            time.sleep(14400) 
 
 if __name__ == "__main__":
-    avvia_pubblicazione()
+    # Controllo di sicurezza per evitare crash immediati se dimentichi le variabili su Render
+    if not TOKEN or not CHANNEL_ID or not AMAZON_TAG:
+        print("ERRORE: Variabili d'ambiente mancanti su Render!")
+    else:
+        avvia_pubblicazione()
