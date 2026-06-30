@@ -34,6 +34,22 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 ]
 
+# ==================== CONFIGURAZIONE PROXY WEBSHARE ====================
+# I tuoi 10 proxy gratuiti integrati e pronti all'uso
+PROXY_LIST = [
+    "http://fwwvbzyj:p2oxgzm3oc4n@31.59.20.176:6754",
+    "http://fwwvbzyj:p2oxgzm3oc4n@31.56.127.193:7684",
+    "http://fwwvbzyj:p2oxgzm3oc4n@45.38.107.97:6014",
+    "http://fwwvbzyj:p2oxgzm3oc4n@38.154.203.95:5863",
+    "http://fwwvbzyj:p2oxgzm3oc4n@198.105.121.200:6462",
+    "http://fwwvbzyj:p2oxgzm3oc4n@64.137.96.74:6641",
+    "http://fwwvbzyj:p2oxgzm3oc4n@198.23.243.226:6361",
+    "http://fwwvbzyj:p2oxgzm3oc4n@38.154.185.97:6370",
+    "http://fwwvbzyj:p2oxgzm3oc4n@142.111.67.146:5611",
+    "http://fwwvbzyj:p2oxgzm3oc4n@191.96.254.138:6185"
+]
+# =======================================================================
+
 def carica_cronologia():
     if os.path.exists(CACHE_FILE):
         try:
@@ -51,19 +67,15 @@ def salva_cronologia(cronologia):
         print(f"Errore nel salvataggio della cronologia: {e}")
 
 def pulisci_prezzo(testo):
-    """Estrae in modo sicuro un valore float da una stringa di prezzo in formato italiano (es. € 1.250,45 o 24,99€)"""
     if not testo:
         return None
-    # Rimuove tutto tranne numeri, virgole e punti
     testo_pulito = re.sub(r'[^\d.,]', '', testo)
     if not testo_pulito:
         return None
     
-    # Se l'ultimo separatore è una virgola, scambiamo i punti con stringa vuota e la virgola con il punto
     if ',' in testo_pulito and ('.' not in testo_pulito or testo_pulito.rfind(',') > testo_pulito.rfind('.')):
         testo_pulito = testo_pulito.replace('.', '').replace(',', '.')
     else:
-        # Se c'è solo il punto come decimale (formato anglosassone o parziale)
         testo_pulito = testo_pulito.replace(',', '')
         
     try:
@@ -82,13 +94,22 @@ def cerca_offerte_amazon(keyword):
         "Connection": "keep-alive"
     }
     
+    # Estrae un proxy a caso per questa richiesta
+    proxy_scelto = random.choice(PROXY_LIST)
+    proxies_config = {
+        "http": proxy_scelto,
+        "https": proxy_scelto
+    }
+    
     try:
-        time.sleep(random.uniform(3.0, 6.0)) # Un po' più di respiro
-        response = requests.get(url, headers=headers, timeout=15)
+        time.sleep(random.uniform(3.0, 6.0))
+        
+        # Richiesta effettuata tramite il proxy Webshare
+        response = requests.get(url, headers=headers, proxies=proxies_config, timeout=15)
         
         if response.status_code == 503 or "captcha" in response.text.lower():
             print(f"⚠️ Amazon ha rilevato il bot (Bot Check / 503) per la keyword: {keyword}")
-            return ofertas_trovate
+            return offerte_trovate
             
         if response.status_code != 200:
             print(f"Errore HTTP {response.status_code} per la keyword {keyword}")
@@ -105,14 +126,16 @@ def cerca_offerte_amazon(keyword):
             titolo_el = p.find("h2")
             titolo = titolo_el.text.strip() if titolo_el else "Prodotto Amazon"
             
-            # Trova prezzo attuale e barrato
             prezzo_attuale_el = p.find("span", {"class": "a-price"})
             prezzo_barrato_el = p.find("span", {"class": "a-text-price"})
             
             if prezzo_attuale_el and prezzo_barrato_el:
                 testo_attuale = prezzo_attuale_el.find("span", {"class": "a-offscreen"})
-                testo_barrato = prezzo_barrato_el.find("span", {"class": "a-offscreen"})
+                testo_barrato = prezzo_barrato_el.find("span", {"class": "a-text-price"}) # Fisso un selettore più preciso se serve
                 
+                if not testo_barrato:
+                     testo_barrato = prezzo_barrato_el.find("span", {"class": "a-offscreen"})
+
                 if testo_attuale and testo_barrato:
                     prezzo_dopo = pulisci_prezzo(testo_attuale.text)
                     prezzo_prima = pulisci_prezzo(testo_barrato.text)
@@ -134,12 +157,12 @@ def cerca_offerte_amazon(keyword):
                     })
                     
     except Exception as e:
-        print(f"Errore durante lo scraping: {e}")
+        print(f"Errore durante lo scraping con proxy: {e}")
         
     return offerte_trovate
 
 def avvia_pubblicazione():
-    print("Bot avviato con nuova grafica sconti...")
+    print("Bot avviato con nuova grafica sconti e proxy attivi...")
     cronologia_pubblicati = carica_cronologia()
 
     while True:
@@ -173,11 +196,11 @@ def avvia_pubblicazione():
                         cronologia_pubblicati.pop(0)
                     salva_cronologia(cronologia_pubblicati)
                     
-                    time.sleep(15) # Delay tra i messaggi inviati su Telegram
+                    time.sleep(15) 
                 except Exception as e:
                     print(f"Errore nell'invio Telegram: {e}")
             
-            time.sleep(30) # Pausa tra una keyword e l'altra
+            time.sleep(30) 
 
         print("Giro completato. Attendo 2 ore...")
         time.sleep(7200)
