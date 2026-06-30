@@ -5,10 +5,10 @@ import random
 import telebot
 import threading
 import requests
+import re
 from bs4 import BeautifulSoup
 from flask import Flask
 
-# --- INIZIALIZZAZIONE FLASK (Per tenere sveglio Render) ---
 app = Flask('')
 
 @app.route('/')
@@ -19,7 +19,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIGURAZIONE CREDENZIALI ---
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHANNEL_ID = os.environ.get('TELEGRAM_CHANNEL_ID')
 AMAZON_TAG = os.environ.get('AMAZON_TAG')
@@ -30,9 +29,9 @@ CACHE_FILE = "prodotti_pubblicati.json"
 KEYWORDS_DA_CERCARE = ["creatina monoidrato", "attrezzatura palestra home gym"]
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 ]
 
 def carica_cronologia():
@@ -51,7 +50,27 @@ def salva_cronologia(cronologia):
     except Exception as e:
         print(f"Errore nel salvataggio della cronologia: {e}")
 
-# --- MOTORE DI SCRAPING CON CALCOLO SCONTO ---
+def pulisci_prezzo(testo):
+    """Estrae in modo sicuro un valore float da una stringa di prezzo in formato italiano (es. € 1.250,45 o 24,99€)"""
+    if not testo:
+        return None
+    # Rimuove tutto tranne numeri, virgole e punti
+    testo_pulito = re.sub(r'[^\d.,]', '', testo)
+    if not testo_pulito:
+        return None
+    
+    # Se l'ultimo separatore è una virgola, scambiamo i punti con stringa vuota e la virgola con il punto
+    if ',' in testo_pulito and ('.' not in testo_pulito or testo_pulito.rfind(',') > testo_pulito.rfind('.')):
+        testo_pulito = testo_pulito.replace('.', '').replace(',', '.')
+    else:
+        # Se c'è solo il punto come decimale (formato anglosassone o parziale)
+        testo_pulito = testo_pulito.replace(',', '')
+        
+    try:
+        return float(testo_pulito)
+    except ValueError:
+        return None
+
 def cerca_offerte_amazon(keyword):
     offerte_trovate = []
     url = f"https://www.amazon.it/s?k={keyword.replace(' ', '+')}"
@@ -64,10 +83,15 @@ def cerca_offerte_amazon(keyword):
     }
     
     try:
-        time.sleep(random.uniform(2.0, 5.0))
+        time.sleep(random.uniform(3.0, 6.0)) # Un po' più di respiro
         response = requests.get(url, headers=headers, timeout=15)
         
+        if response.status_code == 503 or "captcha" in response.text.lower():
+            print(f"⚠️ Amazon ha rilevato il bot (Bot Check / 503) per la keyword: {keyword}")
+            return ofertas_trovate
+            
         if response.status_code != 200:
+            print(f"Errore HTTP {response.status_code} per la keyword {keyword}")
             return offerte_trovate
         
         soup = BeautifulSoup(response.text, "html.parser")
@@ -81,35 +105,23 @@ def cerca_offerte_amazon(keyword):
             titolo_el = p.find("h2")
             titolo = titolo_el.text.strip() if titolo_el else "Prodotto Amazon"
             
-            # 1. Trova il prezzo attuale (Prezzo DOPO)
-            prezzo_attuale_el = p.find("span", {"class": "a-price-whole"})
-            prezzo_centesimi_el = p.find("span", {"class": "a-price-fraction"})
-            
-            # 2. Trova il prezzo barrato (Prezzo PRIMA)
+            # Trova prezzo attuale e barrato
+            prezzo_attuale_el = p.find("span", {"class": "a-price"})
             prezzo_barrato_el = p.find("span", {"class": "a-text-price"})
             
-            # Procediamo solo se abbiamo sia il prezzo attuale che quello barrato (quindi c'è uno sconto reale)
             if prezzo_attuale_el and prezzo_barrato_el:
-                # Pulizia prezzo attuale
-                centesimi = prezzo_centesimi_el.text.strip() if prezzo_centesimi_el else "00"
-                testo_prezzo_attuale = f"{prezzo_attuale_el.text.strip()},{centesimi}".replace("€", "").strip()
+                testo_attuale = prezzo_attuale_el.find("span", {"class": "a-offscreen"})
+                testo_barrato = prezzo_barrato_el.find("span", {"class": "a-offscreen"})
                 
-                # Pulizia prezzo barrato (Amazon spesso lo scrive come "€50,00" o "50,00€")
-                testo_prezzo_barrato = prezzo_barrato_el.find("span", {"class": "a-offscreen"})
-                if testo_prezzo_barrato:
-                    testo_prezzo_barrato = testo_prezzo_barrato.text.strip().replace("€", "").replace(".", "").replace(",", ".").strip()
-                else:
-                    continue
-                
-                try:
-                    # Convertiamo in numeri per calcolare lo sconto percentuale reale
-                    prezzo_dopo = float(testo_prezzo_attuale.replace(".", "").replace(",", "."))
-                    prezzo_prima = float(testo_prezzo_barrato)
+                if testo_attuale and testo_barrato:
+                    prezzo_dopo = pulisci_prezzo(testo_attuale.text)
+                    prezzo_prima = pulisci_prezzo(testo_barrato.text)
                     
-                    # Calcolo matematico della percentuale: ((Prima - Dopo) / Prima) * 100
+                    if not prezzo_dopo or not prezzo_prima or prezzo_prima <= prezzo_dopo:
+                        continue
+                        
                     percentuale_sconto = int(round(((prezzo_prima - prezzo_dopo) / prezzo_prima) * 100))
                     
-                    # Evitiamo errori strani o sconti dello 0%
                     if percentuale_sconto <= 0:
                         continue
                         
@@ -120,23 +132,21 @@ def cerca_offerte_amazon(keyword):
                         "prezzo_dopo": f"€ {prezzo_dopo:.2f}".replace(".", ","),
                         "sconto": f"{percentuale_sconto}%"
                     })
-                except ValueError:
-                    # Se la conversione fallisce a causa di caratteri strani, salta il prodotto in modo sicuro
-                    continue
-                
+                    
     except Exception as e:
         print(f"Errore durante lo scraping: {e}")
         
     return offerte_trovate
 
-# --- PROCESSO PRINCIPALE ---
 def avvia_pubblicazione():
     print("Bot avviato con nuova grafica sconti...")
     cronologia_pubblicati = carica_cronologia()
 
     while True:
         for keyword in KEYWORDS_DA_CERCARE:
+            print(f"Avvio ricerca per: {keyword}")
             prodotti_in_offerta = cerca_offerte_amazon(keyword)
+            print(f"Trovati {len(prodotti_in_offerta)} prodotti in offerta.")
             
             for prodotto in prodotti_in_offerta:
                 asin = prodotto['asin']
@@ -146,7 +156,6 @@ def avvia_pubblicazione():
                 
                 link_affiliato = f"https://www.amazon.it/dp/{asin}/?tag={AMAZON_TAG}"
                 
-                # --- NUOVA GRAFICA MESSAGGIO TELEGRAM ---
                 messaggio = (
                     f"💥 <b>SCONTO DEL {prodotto['sconto']}</b> 💥\n\n"
                     f"📦 <b>{prodotto['titolo']}</b>\n\n"
@@ -164,13 +173,14 @@ def avvia_pubblicazione():
                         cronologia_pubblicati.pop(0)
                     salva_cronologia(cronologia_pubblicati)
                     
-                    time.sleep(15)
+                    time.sleep(15) # Delay tra i messaggi inviati su Telegram
                 except Exception as e:
-                    print(f"Errore nell'invio: {e}")
+                    print(f"Errore nell'invio Telegram: {e}")
             
-            time.sleep(60)
+            time.sleep(30) # Pausa tra una keyword e l'altra
 
-        time.sleep(7200) # Controllo ogni 2 ore
+        print("Giro completato. Attendo 2 ore...")
+        time.sleep(7200)
 
 if __name__ == "__main__":
     if not TOKEN or not CHANNEL_ID or not AMAZON_TAG:
