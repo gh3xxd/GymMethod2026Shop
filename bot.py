@@ -16,7 +16,8 @@ def home():
     return "Il bot Amazon Offerte (Grafica Sconti) è ONLINE!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
+    # Render usa la porta 10000 di default per i servizi web
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
@@ -26,16 +27,16 @@ AMAZON_TAG = os.environ.get('AMAZON_TAG')
 bot = telebot.TeleBot(TOKEN)
 CACHE_FILE = "prodotti_pubblicati.json"
 
-KEYWORDS_DA_CERCARE = ["creatina monoidrato", "attrezzatura palestra home gym"]
+# Inserisci qui le parole chiave reali che vuoi cercare (NON i link interi)
+KEYWORDS_DA_CERCARE = ["esn designer protein", "creatina monoidrato", "attrezzatura palestra home gym"]
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36"
 ]
 
 # ==================== CONFIGURAZIONE PROXY WEBSHARE ====================
-# I tuoi 10 proxy gratuiti integrati e pronti all'uso
 PROXY_LIST = [
     "http://fwwvbzyj:p2oxgzm3oc4n@31.59.20.176:6754",
     "http://fwwvbzyj:p2oxgzm3oc4n@31.56.127.193:7684",
@@ -94,18 +95,18 @@ def cerca_offerte_amazon(keyword):
         "Connection": "keep-alive"
     }
     
-    # Estrae un proxy a caso per questa richiesta
     proxy_scelto = random.choice(PROXY_LIST)
     proxies_config = {
         "http": proxy_scelto,
         "https": proxy_scelto
     }
     
+    ip_visibile = proxy_scelto.split("@")[-1] if "@" in proxy_scelto else proxy_scelto
+    print(f"🔄 Tento la ricerca usando il proxy: {ip_visibile}")
+    
     try:
-        time.sleep(random.uniform(3.0, 6.0))
-        
-        # Richiesta effettuata tramite il proxy Webshare
-        response = requests.get(url, headers=headers, proxies=proxies_config, timeout=15)
+        time.sleep(random.uniform(2.0, 4.0))
+        response = requests.get(url, headers=headers, proxies=proxies_config, timeout=8)
         
         if response.status_code == 503 or "captcha" in response.text.lower():
             print(f"⚠️ Amazon ha rilevato il bot (Bot Check / 503) per la keyword: {keyword}")
@@ -131,7 +132,7 @@ def cerca_offerte_amazon(keyword):
             
             if prezzo_attuale_el and prezzo_barrato_el:
                 testo_attuale = prezzo_attuale_el.find("span", {"class": "a-offscreen"})
-                testo_barrato = prezzo_barrato_el.find("span", {"class": "a-text-price"}) # Fisso un selettore più preciso se serve
+                testo_barrato = prezzo_barrato_el.find("span", {"class": "a-text-price"})
                 
                 if not testo_barrato:
                      testo_barrato = prezzo_barrato_el.find("span", {"class": "a-offscreen"})
@@ -157,19 +158,19 @@ def cerca_offerte_amazon(keyword):
                     })
                     
     except Exception as e:
-        print(f"Errore durante lo scraping con proxy: {e}")
+        print(f"❌ Errore/Timeout con il proxy {ip_visibile}: {e}")
         
     return offerte_trovate
 
 def avvia_pubblicazione():
-    print("Bot avviato con nuova grafica sconti e proxy attivi...")
+    print("Bot avviato regolarmente in background...")
     cronologia_pubblicati = carica_cronologia()
 
     while True:
         for keyword in KEYWORDS_DA_CERCARE:
             print(f"Avvio ricerca per: {keyword}")
             prodotti_in_offerta = cerca_offerte_amazon(keyword)
-            print(f"Trovati {len(prodotti_in_offerta)} prodotti in offerta.")
+            print(f"Trovati {len(prodotti_in_offerta)} prodotti in offerta per '{keyword}'.")
             
             for prodotto in prodotti_in_offerta:
                 asin = prodotto['asin']
@@ -207,13 +208,12 @@ def avvia_pubblicazione():
 
 if __name__ == "__main__":
     if not TOKEN or not CHANNEL_ID or not AMAZON_TAG:
-        print("Variabili d'ambiente mancanti!")
+        print("Variabili d'ambiente mancanti su Render!")
     else:
-        # 1. Avviamo la pubblicazione/test in un thread separato in background
+        # 1. Avviamo il bot in un thread separato in background
         bot_thread = threading.Thread(target=avvia_pubblicazione)
         bot_thread.daemon = True
         bot_thread.start()
         
-        # 2. Lasciamo che Flask giri sul thread principale. 
-        # Render vedrà subito la porta 10000 attiva e il bot nel frattempo lavorerà dietro le quinte!
+        # 2. Avviamo Flask sul thread principale per Render
         run_flask()
