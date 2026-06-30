@@ -26,7 +26,7 @@ AMAZON_TAG = os.environ.get('AMAZON_TAG')
 bot = telebot.TeleBot(TOKEN)
 CACHE_FILE = "prodotti_pubblicati.json"
 
-KEYWORDS_DA_CERCARE = ["https://www.amazon.it/ESN-Designer-Protein-Cherry-yogurt/dp/B0057DWL16/ref=b2b_gw_d_bp_bd_rtpb_d_sccl_4/520-8527097-3728103?pd_rd_w=jsqaT&content-id=amzn1.sym.7f412f17-d393-4c9b-9015-638178c24a6b&pf_rd_p=7f412f17-d393-4c9b-9015-638178c24a6b&pf_rd_r=7HQ3B54SX8DPN78G2AJV&pd_rd_wg=c3BFX&pd_rd_r=c1e74e02-03ec-493d-8511-1292a046ab5f&pd_rd_i=B0057DWL16&psc=1"]
+KEYWORDS_DA_CERCARE = ["creatina monoidrato", "attrezzatura palestra home gym"]
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -209,7 +209,11 @@ if __name__ == "__main__":
     if not TOKEN or not CHANNEL_ID or not AMAZON_TAG:
         print("Variabili d'ambiente mancanti!")
     else:
-        t = threading.Thread(target=run_flask)
-        t.daemon = True
-        t.start()
-        avvia_pubblicazione()
+        # 1. Avviamo la pubblicazione/test in un thread separato in background
+        bot_thread = threading.Thread(target=avvia_pubblicazione)
+        bot_thread.daemon = True
+        bot_thread.start()
+        
+        # 2. Lasciamo che Flask giri sul thread principale. 
+        # Render vedrà subito la porta 10000 attiva e il bot nel frattempo lavorerà dietro le quinte!
+        run_flask()
