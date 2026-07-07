@@ -2,3 +2,4 @@ pyTelegramBotAPI
 flask
 requests
 beautifulsoup4
+supabase==2.4.0
