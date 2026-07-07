@@ -8,6 +8,8 @@ import requests
 import re
 from bs4 import BeautifulSoup
 from flask import Flask
+# Importiamo il client di Supabase
+from supabase import create_client, Client
 
 app = Flask('')
 
@@ -23,6 +25,17 @@ def run_flask():
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHANNEL_ID = os.environ.get('TELEGRAM_CHANNEL_ID')
 AMAZON_TAG = os.environ.get('AMAZON_TAG')
+
+# Configurazione credenziali Supabase dalle variabili d'ambiente
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
+
+# Inizializzazione del database client
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    print("⚠️ Attenzione: SUPABASE_URL o SUPABASE_KEY non configurati nelle variabili d'ambiente!")
+    supabase = None
 
 bot = telebot.TeleBot(TOKEN)
 CACHE_FILE = "prodotti_pubblicati.json"
@@ -85,6 +98,25 @@ def salva_cronologia(cronologia):
             json.dump(cronologia, f)
     except Exception as e:
         print(f"Errore salvataggio cronologia: {e}")
+
+# ==================== STRATEGIA SUPABASE (MAGAZZINO) ====================
+def salva_offerta_su_db(asin, titolo, prezzo_attuale, prezzo_vecchio):
+    """Sincronizza il prodotto nel database Supabase creando un magazzino"""
+    if not supabase:
+        return
+    try:
+        data = {
+            "asin": asin,
+            "titolo": titolo,
+            "prezzo_base": prezzo_vecchio,
+            "ultimo_prezzo": prezzo_attuale,
+            "ultimo_controllo": "now()"  # Aggiorna il timestamp SQL nativo
+        }
+        # L'upsert inserisce se nuovo o aggiorna se l'asin esiste già
+        supabase.table("offerte").upsert(data, on_conflict="asin").execute()
+        print(f"💾 Prodotto {asin} sincronizzato con successo nel DB")
+    except Exception as e:
+        print(f"❌ Errore sincronizzazione Supabase: {e}")
 
 # ==================== PREZZI ====================
 def pulisci_prezzo(testo):
@@ -150,6 +182,7 @@ def cerca_offerte_amazon(keyword):
 
             titolo_el = p.find("h2")
             titolo = titolo_el.text.strip() if titolo_el else "Prodotto Amazon"
+            titolo_troncato = titolo[:80] + "..." if len(titolo) > 80 else titolo
 
             prezzo_attuale_el = p.find("span", {"class": "a-price"})
             prezzo_barrato_el = p.find("span", {"class": "a-text-price"})
@@ -165,15 +198,18 @@ def cerca_offerte_amazon(keyword):
                     if not prezzo_dopo or not prezzo_prima or prezzo_prima <= prezzo_dopo:
                         continue
 
+                    # [STRATEGIA MAGAZZINO]: Salviamo/Aggiorniamo comunque il prodotto nel DB Supabase
+                    salva_offerta_su_db(asin, titolo_troncato, prezzo_dopo, prezzo_prima)
+
                     percentuale_sconto = int(round(((prezzo_prima - prezzo_dopo) / prezzo_prima) * 100))
 
-                    # filtro minimo 30%
+                    # filtro minimo 30% per l'invio immediato su Telegram
                     if percentuale_sconto < 30:
                         continue
 
                     offerte_trovate.append({
                         "asin": asin,
-                        "titolo": titolo[:80] + "..." if len(titolo) > 80 else titolo,
+                        "titolo": titolo_troncato,
                         "prezzo_prima": f"€ {prezzo_prima:.2f}".replace(".", ","),
                         "prezzo_dopo": f"€ {prezzo_dopo:.2f}".replace(".", ","),
                         "sconto": f"{percentuale_sconto}%"
@@ -196,7 +232,7 @@ def avvia_pubblicazione():
             print(f"🔎 Avvio ricerca per: {keyword}")
 
             prodotti_in_offerta = cerca_offerte_amazon(keyword)
-            print(f"Trovati {len(prodotti_in_offerta)} prodotti validi")
+            print(f"Trovati {len(prodotti_in_offerta)} prodotti validi per la pubblicazione")
 
             # mescola i risultati
             random.shuffle(prodotti_in_offerta)
