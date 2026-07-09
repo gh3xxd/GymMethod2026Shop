@@ -1,14 +1,13 @@
 import os
 import time
-import json
 import random
 import telebot
 import threading
 import requests
 import re
+from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 from flask import Flask
-# Importiamo il client di Supabase
 from supabase import create_client, Client
 
 app = Flask('')
@@ -19,32 +18,44 @@ def home():
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    # debug=False è cruciale in produzione per evitare che il thread si avvii due volte
     app.run(host='0.0.0.0', port=port, debug=False)
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHANNEL_ID = os.environ.get('TELEGRAM_CHANNEL_ID')
 AMAZON_TAG = os.environ.get('AMAZON_TAG')
-
-# Configurazione credenziali Supabase dalle variabili d'ambiente
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 
-# Inizializzazione del database client
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
-    print("⚠️ Attenzione: SUPABASE_URL o SUPABASE_KEY non configurati nelle variabili d'ambiente!")
+    print("⚠️ Attenzione: Supabase non configurato nelle variabili d'ambiente!")
     supabase = None
 
-bot = telebot.TeleBot(TOKEN)
-CACHE_FILE = "prodotti_pubblicati.json"
+bot = telebot.TeleBot(TOKEN) if TOKEN else None
 
-# Keyword da ruotare casualmente
+# ==================== CONFIGURAZIONE NICCHIA PALESTRA ====================
 KEYWORDS_DA_CERCARE = [
     "esn designer protein",
     "creatina monoidrato",
-    "attrezzatura palestra home gym"
+    "proteine whey 1kg",
+    "barrette proteiche box",
+    "aminoacidi bcaa",
+    "burro darachidi 1kg",
+    "avena istantanea aromatizzata",
+    "omega 3 integratore",
+    "pre workout energetico",
+    "integratore magnesio potassio",
+    "crema di riso istantanea",
+    "salsa zero calorie",
+    "albume duovo brik"
+]
+
+PAROLE_BANNATE = [
+    "manubri", "bilanciere", "panca", "elastici", "guanti", "tappetino", 
+    "corda", "borraccia", "shaker", "cintura palestra", "gancio", "polsini", 
+    "rack", "tapis roulant", "cyclette", "maglietta", "canotta", "pantaloncini",
+    "borsa", "zaino", "Gym", "attrezzatura", "palla medica", "kettlebell"
 ]
 
 USER_AGENTS = [
@@ -53,79 +64,96 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 ]
 
-# ==================== PROXY ====================
-PROXY_LIST = [
-    "http://fwwvbzyj:p2oxgzm3oc4n@31.59.20.176:6754",
-    "http://fwwvbzyj:p2oxgzm3oc4n@31.56.127.193:7684",
-    "http://fwwvbzyj:p2oxgzm3oc4n@45.38.107.97:6014",
-    "http://fwwvbzyj:p2oxgzm3oc4n@38.154.203.95:5863",
-    "http://fwwvbzyj:p2oxgzm3oc4n@198.105.121.200:6462",
-    "http://fwwvbzyj:p2oxgzm3oc4n@64.137.96.74:6641",
-    "http://fwwvbzyj:p2oxgzm3oc4n@198.23.243.226:6361",
-    "http://fwwvbzyj:p2oxgzm3oc4n@38.154.185.97:6370",
-    "http://fwwvbzyj:p2oxgzm3oc4n@142.111.67.146:5611",
-    "http://fwwvbzyj:p2oxgzm3oc4n@191.96.254.138:6185"
-]
-
+# ==================== GESTIONE PROXY DINAMICI ====================
+PROXY_LIST = [] 
 PROXY_CORRENTE = None
 PROXY_CAMBIO_ORA = 0
 
-def scegli_proxy():
-    global PROXY_CORRENTE, PROXY_CAMBIO_ORA
+def scarica_proxy_da_geonix():
+    """Scrappa i proxy gratuiti direttamente da Geonix"""
+    url = "https://free.geonix.com/it/?page=1"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+    proxy_scrappati = []
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            print(f"❌ Impossibile raggiungere Geonix. Status: {response.status_code}")
+            return []
+            
+        soup = BeautifulSoup(response.text, "html.parser")
+        righe = soup.find_all("tr")
+        
+        for riga in righe:
+            celle = riga.find_all("td")
+            if len(celle) >= 4:
+                ip = celle[0].text.strip()
+                ip = re.sub(r'[^\d.]', '', ip) 
+                porta = celle[1].text.strip()
+                
+                if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip) and porta.isdigit():
+                    stringa_proxy = f"http://{ip}:{porta}"
+                    if stringa_proxy not in proxy_scrappati:
+                        proxy_scrappati.append(stringa_proxy)
+                        
+        print(f"📡 Geonix: Scaricati con successo {len(proxy_scrappati)} proxy dinamici.")
+        return proxy_scrappati
+    except Exception as e:
+        print(f"❌ Errore durante lo scraping da Geonix: {e}")
+        return []
+
+def scegli_proxy(forza_cambio=False):
+    global PROXY_CORRENTE, PROXY_CAMBIO_ORA, PROXY_LIST
     ora = time.time()
 
-    if PROXY_CORRENTE is None or ora > PROXY_CAMBIO_ORA:
+    if not PROXY_LIST or forza_cambio:
+        print("🔄 Aggiornamento del pool di proxy da Geonix in corso...")
+        PROXY_LIST = scarica_proxy_da_geonix()
+        
+        if not PROXY_LIST:
+            print("⚠️ Fallback: Geonix vuoto. Uso proxy di emergenza temporaneo.")
+            PROXY_LIST = ["http://91.214.62.121:8053"] 
+
+    if PROXY_CORRENTE is None or ora > PROXY_CAMBIO_ORA or forza_cambio:
         PROXY_CORRENTE = random.choice(PROXY_LIST)
-        # cambio proxy ogni 4-6 ore
-        PROXY_CAMBIO_ORA = ora + random.randint(14400, 21600)
-        print("🔄 Nuovo proxy selezionato")
+        PROXY_CAMBIO_ORA = ora + random.randint(1800, 3600) 
+        print(f"🔄 {'[FORZATO]' if forza_cambio else ''} Nuovo proxy selezionato: {PROXY_CORRENTE}")
 
     return PROXY_CORRENTE
 
-# ==================== CRONOLOGIA ====================
-def carica_cronologia():
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return []
-    return []
-
-def salva_cronologia(cronologia):
-    try:
-        with open(CACHE_FILE, 'w') as f:
-            json.dump(cronologia, f)
-    except Exception as e:
-        print(f"Errore salvataggio cronologia: {e}")
-
-# ==================== STRATEGIA SUPABASE (MAGAZZINO) ====================
-def salva_offerta_su_db(asin, titolo, prezzo_attuale, prezzo_vecchio):
-    """Sincronizza il prodotto nel database Supabase creando un magazzino"""
-    if not supabase:
-        return
+# ==================== SUPABASE DB ====================
+def salva_offerta_su_db(asin, titolo, prezzo_attuale, prezzo_vecchio, pubblicato=False):
+    if not supabase: return
     try:
         data = {
             "asin": asin,
             "titolo": titolo,
             "prezzo_base": prezzo_vecchio,
             "ultimo_prezzo": prezzo_attuale,
-            "ultimo_controllo": "now()"  # Aggiorna il timestamp SQL nativo
+            "pubblicato": pubblicato,
+            "ultimo_controllo": "now()"
         }
-        # L'upsert inserisce se nuovo o aggiorna se l'asin esiste già
         supabase.table("offerte").upsert(data, on_conflict="asin").execute()
-        print(f"💾 Prodotto {asin} sincronizzato con successo nel DB")
     except Exception as e:
         print(f"❌ Errore sincronizzazione Supabase: {e}")
 
-# ==================== PREZZI ====================
-def pulisci_prezzo(testo):
-    if not testo:
-        return None
+def asin_gia_pubblicato(asin):
+    if not supabase: return False
+    try:
+        res = supabase.table("offerte").select("pubblicato").eq("asin", asin).execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0].get("pubblicato", False)
+    except Exception as e:
+        print(f"❌ Errore lettura Supabase: {e}")
+    return False
 
+# ==================== UTILS PREZZI ====================
+def pulisci_prezzo(testo):
+    if not testo: return None
     testo_pulito = re.sub(r'[^\d.,]', '', testo)
-    if not testo_pulito:
-        return None
+    if not testo_pulito: return None
 
     if ',' in testo_pulito and ('.' not in testo_pulito or testo_pulito.rfind(',') > testo_pulito.rfind('.')):
         testo_pulito = testo_pulito.replace('.', '').replace(',', '.')
@@ -137,10 +165,12 @@ def pulisci_prezzo(testo):
     except ValueError:
         return None
 
-# ==================== RICERCA AMAZON ====================
+# ==================== SCRAPER ====================
 def cerca_offerte_amazon(keyword):
     offerte_trovate = []
-    url = f"https://www.amazon.it/s?k={keyword.replace(' ', '+')}"
+    
+    # Costruiamo correttamente l'URL codificando la keyword
+    url = f"https://www.amazon.it/s?k={quote_plus(keyword)}"
 
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -150,22 +180,15 @@ def cerca_offerte_amazon(keyword):
     }
 
     proxy_scelto = scegli_proxy()
-    proxies_config = {
-        "http": proxy_scelto,
-        "https": proxy_scelto
-    }
-
-    ip_visibile = proxy_scelto.split("@")[-1] if "@" in proxy_scelto else proxy_scelto
-    print(f"🔄 Ricerca con proxy: {ip_visibile}")
+    proxies_config = {"http": proxy_scelto, "https": proxy_scelto}
 
     try:
-        # pausa casuale prima della richiesta per eludere i controlli
         time.sleep(random.uniform(3, 7))
+        response = requests.get(url, headers=headers, proxies=proxies_config, timeout=12)
 
-        response = requests.get(url, headers=headers, proxies=proxies_config, timeout=10)
-
-        if response.status_code == 503 or "captcha" in response.text.lower():
-            print("⚠️ Amazon ha rilevato un controllo bot (Captcha/533)")
+        if response.status_code in [503, 403] or "captcha" in response.text.lower():
+            print("⚠️ Amazon ha rilevato un blocco/captcha. Forzo la rotazione del proxy.")
+            scegli_proxy(forza_cambio=True)
             return offerte_trovate
 
         if response.status_code != 200:
@@ -177,11 +200,15 @@ def cerca_offerte_amazon(keyword):
 
         for p in prodotti:
             asin = p.get("data-asin")
-            if not asin:
-                continue
+            if not asin: continue
 
             titolo_el = p.find("h2")
             titolo = titolo_el.text.strip() if titolo_el else "Prodotto Amazon"
+            
+            titolo_lower = titolo.lower()
+            if any(parola in titolo_lower for parola in PAROLE_BANNATE):
+                continue 
+
             titolo_troncato = titolo[:80] + "..." if len(titolo) > 80 else titolo
 
             prezzo_attuale_el = p.find("span", {"class": "a-price"})
@@ -198,13 +225,13 @@ def cerca_offerte_amazon(keyword):
                     if not prezzo_dopo or not prezzo_prima or prezzo_prima <= prezzo_dopo:
                         continue
 
-                    # [STRATEGIA MAGAZZINO]: Salviamo/Aggiorniamo comunque il prodotto nel DB Supabase
-                    salva_offerta_su_db(asin, titolo_troncato, prezzo_dopo, prezzo_prima)
-
                     percentuale_sconto = int(round(((prezzo_prima - prezzo_dopo) / prezzo_prima) * 100))
 
-                    # filtro minimo 30% per l'invio immediato su Telegram
-                    if percentuale_sconto < 30:
+                    gia_inviato = asin_gia_pubblicato(asin)
+                    if not gia_inviato:
+                        salva_offerta_su_db(asin, titolo_troncato, prezzo_dopo, prezzo_prima, pubblicato=False)
+
+                    if percentuale_sconto < 30 or gia_inviato:
                         continue
 
                     offerte_trovate.append({
@@ -212,40 +239,34 @@ def cerca_offerte_amazon(keyword):
                         "titolo": titolo_troncato,
                         "prezzo_prima": f"€ {prezzo_prima:.2f}".replace(".", ","),
                         "prezzo_dopo": f"€ {prezzo_dopo:.2f}".replace(".", ","),
-                        "sconto": f"{percentuale_sconto}%"
+                        "sconto": f"{percentuale_sconto}%",
+                        "float_prezzo_dopo": prezzo_dopo,
+                        "float_prezzo_prima": prezzo_prima
                     })
 
     except Exception as e:
-        print(f"❌ Errore ricerca Amazon: {e}")
+        print(f"❌ Errore di rete o timeout: {e}")
+        scegli_proxy(forza_cambio=True)
 
     return offerte_trovate
 
 # ==================== PUBBLICAZIONE TELEGRAM ====================
 def avvia_pubblicazione():
     print("🤖 Bot avviato regolarmente in background...")
-    cronologia_pubblicati = carica_cronologia()
 
     while True:
         try:
-            # scegliamo una sola keyword casuale
             keyword = random.choice(KEYWORDS_DA_CERCARE)
-            print(f"🔎 Avvio ricerca per: {keyword}")
+            print(f"🔎 Avvio ricerca nicchia fitness per: {keyword}")
 
             prodotti_in_offerta = cerca_offerte_amazon(keyword)
-            print(f"Trovati {len(prodotti_in_offerta)} prodotti validi per la pubblicazione")
+            print(f"Trovati {len(prodotti_in_offerta)} integratori/cibi validi.")
 
-            # mescola i risultati
-            random.shuffle(prodotti_in_offerta)
-            pubblicato = False
+            if prodotti_in_offerta:
+                random.shuffle(prodotti_in_offerta)
+                prodotto = prodotti_in_offerta[0]
 
-            for prodotto in prodotti_in_offerta:
-                asin = prodotto["asin"]
-
-                # evita duplicati
-                if asin in cronologia_pubblicati:
-                    continue
-
-                link_affiliato = f"https://www.amazon.it/dp/{asin}/?tag={AMAZON_TAG}"
+                link_affiliato = f"https://www.amazon.it/dp/{prodotto['asin']}/?tag={AMAZON_TAG}"
 
                 messaggio = (
                     f"💥 <b>SCONTO DEL {prodotto['sconto']}</b> 💥\n\n"
@@ -262,42 +283,34 @@ def avvia_pubblicazione():
                         parse_mode='HTML',
                         disable_web_page_preview=False
                     )
-
-                    print(f"✅ Pubblicato: {prodotto['titolo']} - {prodotto['sconto']}")
-                    cronologia_pubblicati.append(asin)
-
-                    if len(cronologia_pubblicati) > 150:
-                        cronologia_pubblicati.pop(0)
-
-                    salva_cronologia(cronologia_pubblicati)
-                    pubblicato = True
-                    break # massimo un prodotto per ricerca ricorsiva
-
-                except Exception as e:
-                    print(f"❌ Errore invio Telegram: {e}")
-
-            if pubblicato:
-                print("✅ Offerta pubblicata. Attendo prossimo ciclo.")
+                    print(f"✅ Pubblicato su Telegram: {prodotto['titolo']}")
+                    
+                    salva_offerta_su_db(
+                        prodotto['asin'], 
+                        prodotto['titolo'], 
+                        prodotto['float_prezzo_dopo'], 
+                        prodotto['float_prezzo_prima'], 
+                        pubblicato=True
+                    )
+                except Exception as tel_err:
+                    print(f"❌ Errore durante l'invio del messaggio a Telegram: {tel_err}")
             else:
-                print("ℹ️ Nessuna offerta nuova trovata.")
+                print("ℹ️ Nessun nuovo integratore in forte sconto trovato in questo ciclo.")
 
         except Exception as main_err:
             print(f"🚨 Errore critico nel loop: {main_err}")
 
-        # intervallo casuale: tra 15 e 25 minuti
         attesa = random.randint(900, 1500)
         print(f"⏳ Prossima ricerca tra {attesa // 60} minuti")
         time.sleep(attesa)
 
-# ==================== AVVIO BOT ====================
+# ==================== AVVIO ====================
 if __name__ == "__main__":
     if not TOKEN or not CHANNEL_ID or not AMAZON_TAG:
-        print("Variabili d'ambiente mancanti su Render!")
+        print("Variabili d'ambiente di Telegram/Amazon mancanti!")
     else:
-        # Thread bot Telegram
         bot_thread = threading.Thread(target=avvia_pubblicazione)
         bot_thread.daemon = True
         bot_thread.start()
 
-        # Server Flask per Render (Bloccante, tiene in piedi l'applicazione)
         run_flask()
