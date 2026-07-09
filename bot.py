@@ -79,8 +79,6 @@ def scarica_proxy_da_geonix():
     
     try:
         print("🌐 Connessione a Geonix in corso...")
-        # (3, 4) significa: 3 secondi per connettersi, 4 secondi per ricevere i dati. 
-        # Se Geonix fa il furbo, la richiesta muore dopo 7 secondi totali invece di bloccarsi per ore.
         response = requests.get(url, headers=headers, timeout=(3, 4))
         print(f"📥 Geonix ha risposto con status: {response.status_code}")
         
@@ -111,33 +109,6 @@ def scarica_proxy_da_geonix():
     except Exception as e:
         print(f"❌ Errore imprevisto durante lo scraping da Geonix: {e}")
         return []
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            print(f"❌ Impossibile raggiungere Geonix. Status: {response.status_code}")
-            return []
-            
-        soup = BeautifulSoup(response.text, "html.parser")
-        righe = soup.find_all("tr")
-        
-        for riga in righe:
-            celle = riga.find_all("td")
-            if len(celle) >= 4:
-                ip = celle[0].text.strip()
-                ip = re.sub(r'[^\d.]', '', ip) 
-                porta = celle[1].text.strip()
-                
-                if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip) and porta.isdigit():
-                    stringa_proxy = f"http://{ip}:{porta}"
-                    if stringa_proxy not in proxy_scrappati:
-                        proxy_scrappati.append(stringa_proxy)
-                        
-        print(f"📡 Geonix: Scaricati con successo {len(proxy_scrappati)} proxy dinamici.")
-        return proxy_scrappati
-    except Exception as e:
-        print(f"❌ Errore durante lo scraping da Geonix: {e}")
-        return []
 
 def scegli_proxy(forza_cambio=False):
     global PROXY_CORRENTE, PROXY_CAMBIO_ORA, PROXY_LIST
@@ -148,7 +119,7 @@ def scegli_proxy(forza_cambio=False):
         PROXY_LIST = scarica_proxy_da_geonix()
         
         if not PROXY_LIST:
-            print("⚠️ Fallback: Geonix vuoto. Uso proxy di emergenza temporaneo.")
+            print("⚠️ Fallback: Pool vuoto o Geonix offline. Uso proxy di emergenza temporaneo.")
             PROXY_LIST = ["http://91.214.62.121:8053"] 
 
     if PROXY_CORRENTE is None or ora > PROXY_CAMBIO_ORA or forza_cambio:
@@ -224,7 +195,7 @@ def cerca_offerte_amazon(keyword):
         
         print(f"🌐 Invio richiesta ad Amazon per: {keyword}...")
         response = requests.get(url, headers=headers, proxies=proxies_config, timeout=(4, 7))
-        print(f"📥 Risposta ricevuta. Status Code: {response.status_code}")
+        print(f"📥 Risposta Amazon ricevuta. Status Code: {response.status_code}")
 
         if response.status_code in [503, 403] or "captcha" in response.text.lower():
             print("⚠️ Amazon ha rilevato un blocco/captcha o proxy non valido. Forzo rotazione.")
@@ -287,7 +258,7 @@ def cerca_offerte_amazon(keyword):
                     })
 
     except requests.exceptions.RequestException as req_err:
-        print(f"❌ Errore di rete/Timeout della richiesta: {req_err}")
+        print(f"❌ Errore di rete/Timeout della richiesta Amazon: {req_err}")
         scegli_proxy(forza_cambio=True)
     except Exception as e:
         print(f"❌ Errore generico durante lo scraping: {e}")
