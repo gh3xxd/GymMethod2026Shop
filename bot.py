@@ -247,4 +247,79 @@ def cerca_offerte_amazon(keyword):
                         "prezzo_prima": f"€ {prezzo_prima:.2f}".replace(".", ","),
                         "prezzo_dopo": f"€ {prezzo_dopo:.2f}".replace(".", ","),
                         "sconto": f"{percentuale_sconto}%",
-                        "float_prezzo_dopo":
+                        "float_prezzo_dopo": prezzo_dopo,
+                        "float_prezzo_prima": prezzo_prima
+                    })
+
+    except requests.exceptions.RequestException as req_err:
+        print(f"❌ Errore di rete/Timeout della richiesta: {req_err}")
+        scegli_proxy(forza_cambio=True)
+    except Exception as e:
+        print(f"❌ Errore generico durante lo scraping: {e}")
+
+    return offerte_trovate
+
+# ==================== PUBBLICAZIONE TELEGRAM ====================
+def avvia_pubblicazione():
+    print("🤖 Bot avviato regolarmente in background...")
+
+    while True:
+        try:
+            keyword = random.choice(KEYWORDS_DA_CERCARE)
+            print(f"🔎 Avvio ricerca nicchia fitness per: {keyword}")
+
+            prodotti_in_offerta = cerca_offerte_amazon(keyword)
+            print(f"Trovati {len(prodotti_in_offerta)} integratori/cibi validi.")
+
+            if prodotti_in_offerta:
+                random.shuffle(prodotti_in_offerta)
+                prodotto = prodotti_in_offerta[0]
+
+                link_affiliato = f"https://www.amazon.it/dp/{prodotto['asin']}/?tag={AMAZON_TAG}"
+
+                messaggio = (
+                    f"💥 <b>SCONTO DEL {prodotto['sconto']}</b> 💥\n\n"
+                    f"📦 <b>{prodotto['titolo']}</b>\n\n"
+                    f"❌ Prezzo Vecchio: <s>{prodotto['prezzo_prima']}</s>\n"
+                    f"✅ <b>Prezzo Offerta: {prodotto['prezzo_dopo']}</b>\n\n"
+                    f"🔗 👉 <a href='{link_affiliato}'>Apri l'Offerta su Amazon</a>"
+                )
+
+                try:
+                    bot.send_message(
+                        CHANNEL_ID,
+                        messaggio,
+                        parse_mode='HTML',
+                        disable_web_page_preview=False
+                    )
+                    print(f"✅ Pubblicato su Telegram: {prodotto['titolo']}")
+                    
+                    salva_offerta_su_db(
+                        prodotto['asin'], 
+                        prodotto['titolo'], 
+                        prodotto['float_prezzo_dopo'], 
+                        prodotto['float_prezzo_prima'], 
+                        pubblicato=True
+                    )
+                except Exception as tel_err:
+                    print(f"❌ Errore durante l'invio del messaggio a Telegram: {tel_err}")
+            else:
+                print("ℹ️ Nessun nuovo integratore in forte sconto trovato in questo ciclo.")
+
+        except Exception as main_err:
+            print(f"🚨 Errore critico nel loop: {main_err}")
+
+        attesa = random.randint(900, 1500)
+        print(f"⏳ Prossima ricerca tra {attesa // 60} minuti")
+        time.sleep(attesa)
+
+# ==================== AVVIO ====================
+if __name__ == "__main__":
+    if not TOKEN or not CHANNEL_ID or not AMAZON_TAG:
+        print("Variabili d'ambiente di Telegram/Amazon mancanti!")
+    else:
+        bot_thread = threading.Thread(target=avvia_pubblicazione)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        run_flask()
