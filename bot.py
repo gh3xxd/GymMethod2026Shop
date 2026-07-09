@@ -244,7 +244,7 @@ def cerca_offerte_amazon(keyword):
                     if not gia_inviato:
                         salva_offerta_su_db(asin, titolo_troncato, prezzo_dopo, prezzo_prima, pubblicato=False)
 
-                    if percentuale_sconto < 30 or gia_inviato:
+                    if percentuale_sconto < 10 or gia_inviato:
                         continue
 
                     offerte_trovate.append({
@@ -315,8 +315,9 @@ def avvia_pubblicazione():
         except Exception as main_err:
             print(f"🚨 Errore critico nel loop: {main_err}")
 
-        attesa = random.randint(900, 1500)
-        print(f"⏳ Prossima ricerca tra {attesa // 60} minuti")
+        # --- MODIFICA AGGRESSIVA PER I TEST ---
+        attesa = 30  # Il bot aspetta solo 30 secondi prima della prossima keyword
+        print(f"⏳ Prossima ricerca tra {attesa} secondi...")
         time.sleep(attesa)
 
 # ==================== AVVIO ====================
