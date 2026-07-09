@@ -70,12 +70,47 @@ PROXY_CORRENTE = None
 PROXY_CAMBIO_ORA = 0
 
 def scarica_proxy_da_geonix():
-    """Scrappa i proxy gratuiti direttamente da Geonix"""
+    """Scrappa i proxy gratuiti direttamente da Geonix con timeout rigido"""
     url = "https://free.geonix.com/it/?page=1"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
     proxy_scrappati = []
+    
+    try:
+        print("🌐 Connessione a Geonix in corso...")
+        # (3, 4) significa: 3 secondi per connettersi, 4 secondi per ricevere i dati. 
+        # Se Geonix fa il furbo, la richiesta muore dopo 7 secondi totali invece di bloccarsi per ore.
+        response = requests.get(url, headers=headers, timeout=(3, 4))
+        print(f"📥 Geonix ha risposto con status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"❌ Impossibile raggiungere Geonix. Status: {response.status_code}")
+            return []
+            
+        soup = BeautifulSoup(response.text, "html.parser")
+        righe = soup.find_all("tr")
+        
+        for riga in righe:
+            celle = riga.find_all("td")
+            if len(celle) >= 4:
+                ip = celle[0].text.strip()
+                ip = re.sub(r'[^\d.]', '', ip) 
+                porta = celle[1].text.strip()
+                
+                if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip) and porta.isdigit():
+                    stringa_proxy = f"http://{ip}:{porta}"
+                    if stringa_proxy not in proxy_scrappati:
+                        proxy_scrappati.append(stringa_proxy)
+                        
+        print(f"📡 Geonix: Scaricati con successo {len(proxy_scrappati)} proxy dinamici.")
+        return proxy_scrappati
+    except requests.exceptions.RequestException as geonix_err:
+        print(f"⚠️ Geonix non ha risposto in tempo o ha rifiutato la connessione: {geonix_err}")
+        return []
+    except Exception as e:
+        print(f"❌ Errore imprevisto durante lo scraping da Geonix: {e}")
+        return []
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
